@@ -4,81 +4,57 @@ from qrcode.constants import ERROR_CORRECT_H
 from PIL import Image
 from io import BytesIO
 import zipfile
-import random
-import string
 import os
 
-# ---------- Optional Supabase (for persistent short links) ----------
-try:
-    from supabase import create_client
-except ImportError:
-    create_client = None
-
-
-@st.cache_resource
-def get_supabase():
-    """Returns a Supabase client if SUPABASE_URL / SUPABASE_KEY are configured, else None."""
-    if create_client is None:
-        return None
-    url = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL", ""))
-    key = st.secrets.get("SUPABASE_KEY", os.environ.get("SUPABASE_KEY", ""))
-    if url and key:
-        return create_client(url, key)
-    return None
-
-
-def generate_code(length=6):
-    chars = string.ascii_letters + string.digits
-    return "".join(random.choice(chars) for _ in range(length))
-
-
-def shorten_link(original_url):
-    sb = get_supabase()
-    if sb is None:
-        return None  # shortener not configured
-    code = generate_code()
-    sb.table("links").insert({"code": code, "original_url": original_url}).execute()
-    return code
-
-
-def resolve_code(code):
-    sb = get_supabase()
-    if sb is None:
-        return None
-    res = sb.table("links").select("original_url").eq("code", code).execute()
-    if res.data:
-        return res.data[0]["original_url"]
-    return None
-
-
 # ---------- QR generation ----------
-def make_qr(data, fill_color="#000000", back_color="#FFFFFF", box_size=10, logo_img=None, white_backdrop=True):
+def make_qr(data, fill_color="#000000", back_color="#FFFFFF", box_size=10):
     qr = qrcode.QRCode(
         version=1,
-        error_correction=ERROR_CORRECT_H,  # high correction so a logo doesn't break scanning
+        error_correction=ERROR_CORRECT_H,
         box_size=box_size,
         border=4,
     )
     qr.add_data(data)
     qr.make(fit=True)
-    img = qr.make_image(fill_color=fill_color, back_color=back_color).convert("RGB")
+    return qr.make_image(fill_color=fill_color, back_color=back_color).convert("RGB")
 
-    if logo_img is not None:
-        logo = logo_img.convert("RGBA")
-        qr_w, qr_h = img.size
-        logo_size = int(qr_w * 0.25)
-        logo = logo.resize((logo_size, logo_size))
-        pos = ((qr_w - logo_size) // 2, (qr_h - logo_size) // 2)
 
-        if white_backdrop:
-            pad = 10
-            white_bg = Image.new("RGB", (logo_size + pad * 2, logo_size + pad * 2), "white")
-            img.paste(white_bg, (pos[0] - pad, pos[1] - pad))
+def add_logo_below(qr_img, logo_img, logo_scale=0.35, gap=24, margin=24):
+    """Places a crisp logo underneath the QR code — never touches the scannable modules."""
+    logo = logo_img.convert("RGBA")
+    qr_w, qr_h = qr_img.size
 
-        # Paste using the logo's own alpha channel — transparent pixels let the QR show through,
-        # opaque pixels show the logo. No backdrop box if white_backdrop is False.
-        img.paste(logo, pos, mask=logo)
+    logo_w_target = int(qr_w * logo_scale)
+    ratio = logo_w_target / logo.width
+    logo = logo.resize((logo_w_target, int(logo.height * ratio)), Image.LANCZOS)
 
+    canvas_w = qr_w
+    canvas_h = qr_h + gap + logo.height + margin
+    canvas = Image.new("RGB", (canvas_w, canvas_h), "white")
+    canvas.paste(qr_img, (0, 0))
+
+    logo_x = (canvas_w - logo.width) // 2
+    logo_y = qr_h + gap
+    canvas.paste(logo, (logo_x, logo_y), mask=logo)
+
+    return canvas
+
+
+def embed_logo_center(qr_img, logo_img, white_backdrop=True):
+    """Advanced: overlays the logo inside the QR itself (high error-correction keeps it scannable)."""
+    img = qr_img.copy()
+    logo = logo_img.convert("RGBA")
+    qr_w, qr_h = img.size
+    logo_size = int(qr_w * 0.22)
+    logo = logo.resize((logo_size, logo_size), Image.LANCZOS)
+    pos = ((qr_w - logo_size) // 2, (qr_h - logo_size) // 2)
+
+    if white_backdrop:
+        pad = 10
+        white_bg = Image.new("RGB", (logo_size + pad * 2, logo_size + pad * 2), "white")
+        img.paste(white_bg, (pos[0] - pad, pos[1] - pad))
+
+    img.paste(logo, pos, mask=logo)
     return img
 
 
@@ -88,18 +64,6 @@ def img_to_bytes(img):
     buf.seek(0)
     return buf
 
-
-# ---------- Redirect handling (for shortened links) ----------
-params = st.query_params
-if "s" in params:
-    code = params["s"]
-    target = resolve_code(code)
-    if target:
-        st.markdown(f'<meta http-equiv="refresh" content="0; url={target}">', unsafe_allow_html=True)
-        st.write(f"Redirecting to {target} ...")
-    else:
-        st.error("This link doesn't exist or the shortener isn't configured.")
-    st.stop()
 
 # ---------- Main app ----------
 st.set_page_config(page_title="CodeBettle QR Generator", page_icon="🔳")
@@ -111,11 +75,9 @@ if os.path.exists("logo.png"):
 
 tab1, tab2, tab3, tab4 = st.tabs(["🔗 Link / Text", "📶 WiFi", "👤 Contact Card", "📦 Batch"])
 
-# --- Tab 1: Link/Text with optional shortening ---
+# --- Tab 1: Link/Text ---
 with tab1:
     data = st.text_input("Text or URL", placeholder="https://drive.google.com/...")
-
-    use_shortener = st.checkbox("Shorten this link with a CodeBettle short link", value=False)
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -125,36 +87,35 @@ with tab1:
     with col3:
         box_size = st.slider("Size", 4, 20, 10, key="t1_size")
 
-    logo_file = st.file_uploader("Logo to embed (optional, defaults to logo.png if in repo)", type=["png", "jpg", "jpeg"])
+    logo_file = st.file_uploader("Logo (optional, defaults to logo.png if in repo)", type=["png", "jpg", "jpeg"])
     logo_img = Image.open(logo_file) if logo_file else default_logo
-    white_backdrop = st.checkbox(
-        "Add white backdrop behind logo",
-        value=False,
-        help="Turn off if your logo PNG already has a transparent background — it'll sit directly on the QR with no white box.",
+
+    placement = st.radio(
+        "Logo placement",
+        ["Below QR (recommended — never blocks scanning)", "Overlay in center (advanced)"],
+        index=0,
     )
+    white_backdrop = False
+    if placement.startswith("Overlay"):
+        white_backdrop = st.checkbox(
+            "Add white backdrop behind logo",
+            value=False,
+            help="Turn on only if your logo file does NOT already have a transparent background.",
+        )
 
     if st.button("Generate QR", type="primary", key="t1_btn"):
         if not data.strip():
             st.warning("Enter a link or text first.")
         else:
-            final_data = data
-            if use_shortener:
-                code = shorten_link(data)
-                if code is None:
-                    st.error(
-                        "Shortener isn't configured yet. Set up Supabase and add SUPABASE_URL / "
-                        "SUPABASE_KEY to your app secrets (see README). Generating QR for the original link instead."
-                    )
+            qr_img = make_qr(data, fill_color, back_color, box_size)
+            if logo_img is not None:
+                if placement.startswith("Overlay"):
+                    img = embed_logo_center(qr_img, logo_img, white_backdrop)
                 else:
-                    app_url = st.text_input(
-                        "Your deployed app URL (e.g. https://codebettle-qr.streamlit.app)",
-                        key="app_url_hint",
-                    )
-                    base = app_url.strip().rstrip("/") if app_url.strip() else "https://codebettle-qr.streamlit.app"
-                    final_data = f"{base}/?s={code}"
-                    st.success(f"Short link: {final_data}")
+                    img = add_logo_below(qr_img, logo_img)
+            else:
+                img = qr_img
 
-            img = make_qr(final_data, fill_color, back_color, box_size, logo_img, white_backdrop)
             buf = img_to_bytes(img)
             st.image(buf, width=300)
             st.download_button("Download PNG", buf, "qrcode.png", "image/png")
@@ -169,7 +130,8 @@ with tab2:
             st.warning("Enter the network name.")
         else:
             wifi_str = f"WIFI:T:{enc};S:{ssid};P:{password};;"
-            img = make_qr(wifi_str, logo_img=default_logo)
+            qr_img = make_qr(wifi_str)
+            img = add_logo_below(qr_img, default_logo) if default_logo is not None else qr_img
             buf = img_to_bytes(img)
             st.image(buf, width=300)
             st.download_button("Download PNG", buf, "wifi_qr.png", "image/png")
@@ -185,7 +147,8 @@ with tab3:
             st.warning("Enter a name.")
         else:
             vcard = f"BEGIN:VCARD\nVERSION:3.0\nN:{name}\nFN:{name}\nORG:{org}\nTEL:{phone}\nEMAIL:{email}\nEND:VCARD"
-            img = make_qr(vcard, logo_img=default_logo)
+            qr_img = make_qr(vcard)
+            img = add_logo_below(qr_img, default_logo) if default_logo is not None else qr_img
             buf = img_to_bytes(img)
             st.image(buf, width=300)
             st.download_button("Download PNG", buf, "contact_qr.png", "image/png")
@@ -202,7 +165,8 @@ with tab4:
             zip_buf = BytesIO()
             with zipfile.ZipFile(zip_buf, "w") as zf:
                 for i, link in enumerate(links, start=1):
-                    img = make_qr(link, logo_img=default_logo)
+                    qr_img = make_qr(link)
+                    img = add_logo_below(qr_img, default_logo) if default_logo is not None else qr_img
                     img_buf = img_to_bytes(img)
                     zf.writestr(f"qr_{i}.png", img_buf.read())
             zip_buf.seek(0)
