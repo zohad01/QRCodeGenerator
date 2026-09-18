@@ -92,15 +92,15 @@ with tab1:
 
     placement = st.radio(
         "Logo placement",
-        ["Below QR (recommended — never blocks scanning)", "Overlay in center (advanced)"],
+        ["Overlay in center (classic branded look)", "Below QR (never blocks scanning)"],
         index=0,
     )
-    white_backdrop = False
+    white_backdrop = True
     if placement.startswith("Overlay"):
         white_backdrop = st.checkbox(
             "Add white backdrop behind logo",
-            value=False,
-            help="Turn on only if your logo file does NOT already have a transparent background.",
+            value=True,
+            help="Keeps the QR code scannable by giving the logo a clean white circle to sit on.",
         )
 
     if st.button("Generate QR", type="primary", key="t1_btn"):
@@ -131,7 +131,7 @@ with tab2:
         else:
             wifi_str = f"WIFI:T:{enc};S:{ssid};P:{password};;"
             qr_img = make_qr(wifi_str)
-            img = add_logo_below(qr_img, default_logo) if default_logo is not None else qr_img
+            img = embed_logo_center(qr_img, default_logo) if default_logo is not None else qr_img
             buf = img_to_bytes(img)
             st.image(buf, width=300)
             st.download_button("Download PNG", buf, "wifi_qr.png", "image/png")
@@ -148,7 +148,7 @@ with tab3:
         else:
             vcard = f"BEGIN:VCARD\nVERSION:3.0\nN:{name}\nFN:{name}\nORG:{org}\nTEL:{phone}\nEMAIL:{email}\nEND:VCARD"
             qr_img = make_qr(vcard)
-            img = add_logo_below(qr_img, default_logo) if default_logo is not None else qr_img
+            img = embed_logo_center(qr_img, default_logo) if default_logo is not None else qr_img
             buf = img_to_bytes(img)
             st.image(buf, width=300)
             st.download_button("Download PNG", buf, "contact_qr.png", "image/png")
@@ -166,7 +166,7 @@ with tab4:
             with zipfile.ZipFile(zip_buf, "w") as zf:
                 for i, link in enumerate(links, start=1):
                     qr_img = make_qr(link)
-                    img = add_logo_below(qr_img, default_logo) if default_logo is not None else qr_img
+                    img = embed_logo_center(qr_img, default_logo) if default_logo is not None else qr_img
                     img_buf = img_to_bytes(img)
                     zf.writestr(f"qr_{i}.png", img_buf.read())
             zip_buf.seek(0)
