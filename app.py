@@ -52,7 +52,7 @@ def resolve_code(code):
 
 
 # ---------- QR generation ----------
-def make_qr(data, fill_color="#000000", back_color="#FFFFFF", box_size=10, logo_img=None):
+def make_qr(data, fill_color="#000000", back_color="#FFFFFF", box_size=10, logo_img=None, white_backdrop=True):
     qr = qrcode.QRCode(
         version=1,
         error_correction=ERROR_CORRECT_H,  # high correction so a logo doesn't break scanning
@@ -69,9 +69,14 @@ def make_qr(data, fill_color="#000000", back_color="#FFFFFF", box_size=10, logo_
         logo_size = int(qr_w * 0.25)
         logo = logo.resize((logo_size, logo_size))
         pos = ((qr_w - logo_size) // 2, (qr_h - logo_size) // 2)
-        pad = 10
-        white_bg = Image.new("RGB", (logo_size + pad * 2, logo_size + pad * 2), "white")
-        img.paste(white_bg, (pos[0] - pad, pos[1] - pad))
+
+        if white_backdrop:
+            pad = 10
+            white_bg = Image.new("RGB", (logo_size + pad * 2, logo_size + pad * 2), "white")
+            img.paste(white_bg, (pos[0] - pad, pos[1] - pad))
+
+        # Paste using the logo's own alpha channel — transparent pixels let the QR show through,
+        # opaque pixels show the logo. No backdrop box if white_backdrop is False.
         img.paste(logo, pos, mask=logo)
 
     return img
@@ -122,6 +127,11 @@ with tab1:
 
     logo_file = st.file_uploader("Logo to embed (optional, defaults to logo.png if in repo)", type=["png", "jpg", "jpeg"])
     logo_img = Image.open(logo_file) if logo_file else default_logo
+    white_backdrop = st.checkbox(
+        "Add white backdrop behind logo",
+        value=False,
+        help="Turn off if your logo PNG already has a transparent background — it'll sit directly on the QR with no white box.",
+    )
 
     if st.button("Generate QR", type="primary", key="t1_btn"):
         if not data.strip():
@@ -144,7 +154,7 @@ with tab1:
                     final_data = f"{base}/?s={code}"
                     st.success(f"Short link: {final_data}")
 
-            img = make_qr(final_data, fill_color, back_color, box_size, logo_img)
+            img = make_qr(final_data, fill_color, back_color, box_size, logo_img, white_backdrop)
             buf = img_to_bytes(img)
             st.image(buf, width=300)
             st.download_button("Download PNG", buf, "qrcode.png", "image/png")
